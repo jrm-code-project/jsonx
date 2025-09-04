@@ -83,6 +83,9 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
 (eval-when (:load-toplevel :execute)
   (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
 
+(defmethod cl-json:encode-json ((object quri:uri) &optional stream)
+  (quri:render-uri object stream))
+
 (defun dehashify (object)
   (cond ((hash-table-p object)
          (mapcar #'dehashify (hash-table-alist object)))
