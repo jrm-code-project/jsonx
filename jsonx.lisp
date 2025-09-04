@@ -82,3 +82,18 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
 
 (eval-when (:load-toplevel :execute)
   (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
+
+(defun dehashify (object)
+  (cond ((hash-table-p object)
+         (mapcar #'dehashify (hash-table-alist object)))
+        ((consp object)
+         (let ((dehashed-car (dehashify (car object)))
+               (dehashed-cdr (dehashify (cdr object))))
+           (if (and (eq dehashed-car (car object))
+                    (eq dehashed-cdr (cdr object)))
+               object
+               (cons dehashed-car dehashed-cdr))))
+        ((stringp object) object)
+        ((vectorp object)
+         (map 'vector #'dehashify object))
+        (t object)))
