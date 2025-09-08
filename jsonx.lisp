@@ -84,7 +84,14 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
   (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
 
 (defmethod cl-json:encode-json ((object quri:uri) &optional stream)
-  (quri:render-uri object stream))
+  (write-char #\" stream)
+  (quri:render-uri object stream)
+  (write-char #\" stream))
+
+(defmethod cl-json:encode-json ((object pathname) &optional stream)
+  (write-char #\" stream)
+  (princ (namestring object) stream)
+  (write-char #\" stream))
 
 (defun dehashify (object)
   (cond ((hash-table-p object)
