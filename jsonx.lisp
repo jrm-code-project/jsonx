@@ -1,15 +1,23 @@
 ;;; -*- Lisp -*-
 
+;; Note:  This file depends on the CL-JSON library.
+
 (in-package "JSONX")
 
+;; Note:  There is no :reader or :accessor for the VALUE slot.  This is by design.
+;;        json-literal objects are atomic and immutable - they just print as their VALUE
+;;        when encoded in JSON.
 (defclass json-literal ()
-  ((value :initarg :value :type string)))
+  ((value :initarg :value :type string))
+  (:documentation "Class representing a JSON literal value such as true, false, or null."))
 
 (defmethod json:encode-json ((object json-literal) &optional stream)
+  "Render a JSON literal (true, false, null) to the given STREAM."
   (princ (slot-value object 'value) stream)
   nil)
 
 (defmethod print-object ((object json-literal) stream)
+  "Print a JSON literal object (true, false, null) as a Lisp object."
   (print-unreadable-object (object stream :type t)
     (format stream "~a" (slot-value object 'value))))
 
@@ -41,6 +49,7 @@
   * Objects are decoded to hash-tables.
   (Note: Object keys are expected to be converted by a pre-configured
   *JSON-IDENTIFIER-NAME-TO-LISP* and interned in *JSON-SYMBOLS-PACKAGE*.)"
+  ;; By necessity we must use the internal variables and functions of CL-JSON.
   (setq cl-json::+json-lisp-symbol-tokens+
         `(("false" . ,+json-false+)
           ("null"  . ,+json-null+)
@@ -71,30 +80,43 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
      (SET-DECODER-JRM-SEMANTICS)
      ,@body))
 
+;; A simple smoke test to verify that our custom decoder semantics work as intended.
 (eval-when (:load-toplevel :execute)
   (with-decoder-jrm-semantics
     (let* ((json-string1 "{\"a\":1,\"c\":true,\"d\":false,\"e\":null,\"f\":[],\"g\":{\"foo\":42,\"bar\":[1,2,3]}}")
+           (decoded-obj (cl-json:decode-json-from-string json-string1))
            (json-string2
-             (cl-json:encode-json-to-string
-              (cl-json:decode-json-from-string json-string1))))
+             (cl-json:encode-json-to-string decoded-obj)))
       (assert (equal json-string1
                      json-string2))
-      )))
+                  ;; Assert specific values and types
+            (assert (typep decoded-obj 'hash-table))
+            (assert (eq (gethash :c decoded-obj) +json-true+))
+            (assert (eq (gethash :d decoded-obj) +json-false+))
+            (assert (eq (gethash :e decoded-obj) +json-null+))
+            (assert (typep (gethash :f decoded-obj) 'vector))
+            (assert (zerop (length (gethash :f decoded-obj))))
+            (let ((nested-obj (gethash :g decoded-obj)))
+              (assert (typep nested-obj 'hash-table))
+              (assert (= (gethash :foo nested-obj) 42))
+              (let ((bar-array (gethash :bar nested-obj)))
+                (assert (typep bar-array 'vector))
+                (assert (equalp bar-array #(1 2 3))))))))
 
 (defun json-alist-entry? (s)
   "Returns true if S is a cons cell whose CAR (key) is either a symbol or a string,
    suitable for an entry in a JSON-like association list."
   (and (consp s)
-       (or (symbolp (car s))
-           (stringp (car s)))))
+       (or (stringp (car s))
+           (symbolp (car s)))))
 
 (defun is-json-alist? (s)
   "Returns true if S is a list where every element
    is a cons cell whose CAR (key) is either a symbol or a string.
    This is used to determine if a Lisp list can be interpreted as a JSON object."
-  (and (or (null s)
-           (consp s))
-       (every #'json-alist-entry? s)))
+  (or (null s)
+      (and (consp s)
+           (every #'json-alist-entry? s))))
 
 (defun encode-json-list-try-alist (s stream)
   "Encodes a Lisp list S to JSON. If S appears to be an association list
@@ -104,36 +126,50 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
       (cl-json::encode-json-alist s stream)
       (cl-json::encode-json-list-guessing-encoder s stream)))
 
+;; Smash the default list encoder of CL-JSON to use our custom function.
+;; This globally modifies the behavior of CL-JSON's list encoding.
+;; This is done at load time and at execution time to ensure that our new
+;; encoder is used in all relevant contexts.
 (eval-when (:load-toplevel :execute)
   (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
 
 (defmethod cl-json:encode-json ((object quri:uri) &optional stream)
-  "Encodes a QURI:URI object as a JSON string by rendering its URI string
-   representation surrounded by double quotes."
-  (write-char #\" stream)
-  (quri:render-uri object stream)
-  (write-char #\" stream)
-  nil)
+  "Encodes a QURI:URI object as a JSON string."
+  (cl-json:encode-json (quri:render-uri object nil) stream))
 
 (defmethod cl-json:encode-json ((object pathname) &optional stream)
   "Encodes a Common Lisp PATHNAME object as a JSON string,
    using its NAMSTRING representation."
-  (cl-json::write-json-string (namestring object) stream))
+  (cl-json:encode-json (namestring object) stream))
 
-(defun dehashify (object)
-  (cond ((hash-table-p object)
-         (mapcar #'dehashify (hash-table-alist object)))
-        ((consp object)
-         (let ((dehashed-car (dehashify (car object)))
-               (dehashed-cdr (dehashify (cdr object))))
-           (if (and (eq dehashed-car (car object))
-                    (eq dehashed-cdr (cdr object)))
-               object
-               (cons dehashed-car dehashed-cdr))))
-        ((stringp object) object)
-        ((vectorp object)
-         (let ((dehashed (map 'vector #'dehashify object)))
-           (if (every #'eql object dehashed)
-               object
-               dehashed)))
-        (t object)))
+(defun dehashify (object &optional (seen (make-hash-table :test 'eq)))
+  "Recursively traverses a Lisp data structure, converting hash tables into association lists.
+  - Hash tables are converted to association lists, and their elements are recursively dehashified.
+  - Cons cells (lists) have their CAR and CDR recursively dehashified.
+  - Vectors have their elements recursively dehashified.
+  - Strings and other atomic types (numbers, symbols, etc.) are returned as is.
+  The function attempts to preserve structural sharing by returning the original object
+  if no sub-elements are modified during the recursive process."
+  (if (gethash object seen)
+      object
+      (progn
+        (setf (gethash object seen) t)
+        (cond ((consp object)
+               ;; Recursively dehashify both CAR and CDR of the cons cell.
+               (let ((dehashed-car (dehashify (car object) seen))
+                     (dehashed-cdr (dehashify (cdr object) seen)))
+                 (if (and (eq dehashed-car (car object))
+                          (eq dehashed-cdr (cdr object)))
+                     object
+                     (cons dehashed-car dehashed-cdr))))
+              ((hash-table-p object)
+               ;; Convert hash table to an alist and recursively dehashify the result.
+               ;; Both key and value of each entry will be dehashified.
+               (dehashify (hash-table-alist object) seen))
+              ((stringp object) object)
+              ((vectorp object)
+               (let ((dehashed (map 'vector (lambda (elem) (dehashify elem seen)) object)))
+                 (if (every #'eql object dehashed)
+                     object
+                     dehashed)))
+              (t object)))))
