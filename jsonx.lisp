@@ -65,7 +65,11 @@
    :beginning-of-object #'cl-json::init-accumulator
    :object-key #'cl-json::accumulator-add-key
    :object-value #'cl-json::accumulator-add-value
-   :end-of-object (compose #'alist-hash-table #'cl-json::accumulator-get)
+   :end-of-object (compose (lambda (accumulated)
+                             (if (null accumulated)
+                                 +json-empty-object+
+                                 (alist-hash-table accumulated)))
+                           #'cl-json::accumulator-get)
    :beginning-of-string #'cl-json::init-string-stream-accumulator
    :string-char #'cl-json::string-stream-accumulator-add
    :end-of-string #'cl-json::string-stream-accumulator-get
@@ -130,8 +134,11 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
 ;; This globally modifies the behavior of CL-JSON's list encoding.
 ;; This is done at load time and at execution time to ensure that our new
 ;; encoder is used in all relevant contexts.
-(eval-when (:load-toplevel :execute)
-  (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
+;; (eval-when (:load-toplevel :execute)
+;;   (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
+
+(defmethod cl-json:encode-json ((object function) &optional stream)
+  (cl-json:encode-json (prin1-to-string object) stream))
 
 (defmethod cl-json:encode-json ((object quri:uri) &optional stream)
   "Encodes a QURI:URI object as a JSON string."
