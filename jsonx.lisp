@@ -140,14 +140,28 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
 (defmethod cl-json:encode-json ((object function) &optional stream)
   (cl-json:encode-json (prin1-to-string object) stream))
 
-(defmethod cl-json:encode-json ((object quri:uri) &optional stream)
-  "Encodes a QURI:URI object as a JSON string."
-  (cl-json:encode-json (quri:render-uri object nil) stream))
+(defmethod cl-json:encode-json ((object package) &optional stream)
+  (cl-json:encode-json (prin1-to-string object) stream))
 
 (defmethod cl-json:encode-json ((object pathname) &optional stream)
   "Encodes a Common Lisp PATHNAME object as a JSON string,
    using its NAMSTRING representation."
   (cl-json:encode-json (namestring object) stream))
+
+(defmethod cl-json:encode-json ((object quri:uri) &optional stream)
+  "Encodes a QURI:URI object as a JSON string."
+  (cl-json:encode-json (quri:render-uri object nil) stream))
+
+(defmethod cl-json:encode-json ((object structure-object) &optional stream)
+  "Encodes a Common Lisp STRUCTURE object as a JSON object (hash table).
+   Each slot of the structure becomes a key-value pair in the JSON object,
+   with the slot name as the key and the slot value as the value."
+  (let* ((slot-names (mapcar #'closer-mop:slot-definition-name
+                             (closer-mop:class-slots (class-of object))))
+         (alist (mapcar (lambda (slot)
+                          (cons slot (slot-value object slot)))
+                        slot-names)))
+    (cl-json:encode-json alist stream)))
 
 (defun dehashify (object &optional (seen (make-hash-table :test 'eq)))
   "Recursively traverses a Lisp data structure, converting hash tables into association lists.
